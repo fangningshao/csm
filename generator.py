@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 from typing import List, Tuple
-
+import os
 import torch
 import torchaudio
 from huggingface_hub import hf_hub_download
-from models import Model
+from csm.models_exp import Model as LocalModel
+from csm.models import Model
 from moshi.models import loaders
 from tokenizers.processors import TemplateProcessing
 from transformers import AutoTokenizer
@@ -19,21 +20,34 @@ class Segment:
     audio: torch.Tensor
 
 
-def load_llama3_tokenizer():
-    """
-    https://github.com/huggingface/transformers/issues/22794#issuecomment-2092623992
-    """
-    tokenizer_name = "meta-llama/Llama-3.2-1B"
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    bos = tokenizer.bos_token
-    eos = tokenizer.eos_token
-    tokenizer._tokenizer.post_processor = TemplateProcessing(
-        single=f"{bos}:0 $A:0 {eos}:0",
-        pair=f"{bos}:0 $A:0 {eos}:0 {bos}:1 $B:1 {eos}:1",
-        special_tokens=[(f"{bos}", tokenizer.bos_token_id), (f"{eos}", tokenizer.eos_token_id)],
-    )
 
-    return tokenizer
+def load_llama3_tokenizer(local_dir="models/llama-3.2-1b-tokenizer"):
+    """
+    Load Llama 3.2 tokenizer from local directory
+    Args:
+        local_dir: Path to directory containing tokenizer.model
+    """
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            local_dir,
+            local_files_only=True,
+        )
+        bos = tokenizer.bos_token
+        eos = tokenizer.eos_token
+        tokenizer._tokenizer.post_processor = TemplateProcessing(
+            single=f"{bos}:0 $A:0 {eos}:0",
+            pair=f"{bos}:0 $A:0 {eos}:0 {bos}:1 $B:1 {eos}:1",
+            special_tokens=[(f"{bos}", tokenizer.bos_token_id), (f"{eos}", tokenizer.eos_token_id)],
+        )
+        return tokenizer
+    except Exception as e:
+        print(f"Error loading local tokenizer: {e}")
+        print("Falling back to remote tokenizer...")
+        return AutoTokenizer.from_pretrained(
+            "taylorj94/Llama-3.2-1B",
+            token=os.getenv("HUGGING_FACE_HUB_TOKEN"),
+            trust_remote_code=True
+        )
 
 
 class Generator:
@@ -168,9 +182,69 @@ class Generator:
         return audio
 
 
-def load_csm_1b(device: str = "cuda") -> Generator:
-    model = Model.from_pretrained("sesame/csm-1b")
+def load_csm_1b_local(device: str = "cuda", model_path: str = "models/csm-1b") -> Generator:
+    """Load CSM-1B model from local directory"""
+    model = LocalModel.from_pretrained(
+        model_path,
+        local_files_only=True,
+        device=device,
+        trust_remote_code=True
+    )
     model.to(device=device, dtype=torch.bfloat16)
+    return Generator(model)
 
-    generator = Generator(model)
-    return generator
+# def load_csm_1b(device: str = "cuda", model_path: str = "sesame/csm-1b") -> Generator:
+#     """
+#     Load the CSM 1B model and return a generator.
+
+#     To use a local model, clone the repository with LFS and run:
+#     ```
+#     git lfs install
+#     git clone https://huggingface.co/sesame/csm-1b
+#     """
+#     model = Model.from_pretrained(
+#         model_path,
+#         local_files_only=True,  # Force local loading
+#         )
+#     model.to(device=device, dtype=torch.bfloat16)
+
+#     model.save_pretrained('models/csm-1b-saved')
+
+#     generator = Generator(model)
+#     return generator
+
+
+def load_csm_1b(device: str = "cuda", model_path: str = "models/csm-1b") -> Generator:
+    """
+    Load the CSM 1B model and return a generator.
+    Args:
+        device: Device to load model on ('cuda' or 'cpu')
+        model_path: Path to local model directory or HuggingFace model ID
+    """
+    try:
+        # Try loading locally first
+        print(f"Attempting to load model from {model_path}")
+        model = Model.from_pretrained(
+            model_path,
+            local_files_only=True,
+            device=device,
+            trust_remote_code=True
+        )
+    except Exception as e:
+        print(f"Local load failed: {e}")
+        print("Falling back to remote download...")
+        # Fall back to remote download
+        model = Model.from_pretrained(
+            "sesame/csm-1b",
+            device=device,
+            trust_remote_code=True
+        )
+        # Save for future local use
+        save_dir = model_path + ".saved"
+        print(f"Saving model to {save_dir}")
+        os.makedirs(save_dir, exist_ok=True)
+        model.save_pretrained(save_dir)
+        print(f"Model saved to {save_dir}")
+
+    model.to(device=device, dtype=torch.bfloat16)
+    return Generator(model)

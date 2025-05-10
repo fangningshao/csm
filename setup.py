@@ -2,8 +2,9 @@ from setuptools import setup, find_packages
 import os
 
 # Read requirements from requirements.txt
-with open('requirements.txt') as f:
-    requirements = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+#with open('requirements.txt') as f:
+#    requirements = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+requirements=[]
 
 setup(
     name='csm',
